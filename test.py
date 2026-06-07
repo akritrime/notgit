@@ -291,7 +291,8 @@ def run_tests(h, tmp):
     h.assert_file("commit object is stored", p(f".ugit/objects/{c1}"))
 
     write(p("tracked.txt"), "v2\n")
-    h.run("add", "tracked.txt")
+    write(p("c2-only.txt"), "only in second commit\n")
+    h.run("add", "tracked.txt", "c2-only.txt")
     c2 = h.cap("commit", "-m", "second commit")
     h.assert_oid("second commit prints a 64-hex (sha256) oid", c2)
     h.assert_ne("second commit differs from first", c2, c1)
@@ -341,12 +342,17 @@ def run_tests(h, tmp):
     if os.path.isfile(p("tracked.txt")):
         h.assert_eq("checkout restores the working tree of C1",
                     read(p("tracked.txt")), "v1\n")
+    h.ok("checkout removes files absent from target tree",
+         not os.path.exists(p("c2-only.txt")),
+         "c2-only.txt survived checkout to C1")
 
     h.run("checkout", "master")
     h.assert_ok("checkout <branch> exits 0")
     if os.path.isfile(p("tracked.txt")):
         h.assert_eq("checkout master restores latest content",
                     read(p("tracked.txt")), "v2\n")
+    h.assert_file("checkout master restores files from latest tree",
+                  p("c2-only.txt"))
 
     # ---- diff / show ------------------------------------------------------
     h.section("diff / show")
