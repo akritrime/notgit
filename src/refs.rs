@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     errors::NGitError,
@@ -72,6 +75,20 @@ impl RefStore {
         r: &RefName,
         deref: bool,
     ) -> Result<(PathBuf, Option<RefValue>), NGitError> {
+        self.resolve_ref_inner(r, deref, &mut HashSet::new())
+    }
+
+    fn resolve_ref_inner(
+        &self,
+        r: &RefName,
+        deref: bool,
+        seen: &mut HashSet<RefName>,
+    ) -> Result<(PathBuf, Option<RefValue>), NGitError> {
+        if !seen.insert(r.clone()) {
+            return Err(NGitError::OperationFailed(format!(
+                "symbolic ref cycle at {r}"
+            )));
+        }
         let p = self.ref_path(r);
         if !p.is_file() {
             return Ok((p, None));
@@ -79,7 +96,7 @@ impl RefStore {
         let r = std::fs::read_to_string(&p)?;
         let symbolic = r.starts_with("ref:");
         if symbolic && deref {
-            self.resolve_ref(&RefName::new(r[4..].trim())?, true)
+            self.resolve_ref_inner(&RefName::new(r[4..].trim())?, true, seen)
         } else {
             let value = if symbolic {
                 RefValue::symbolic(RefName::new(r[4..].trim())?)
@@ -181,7 +198,9 @@ impl RefStore {
             return Ok(None);
         };
         let name = name.as_str();
-        assert!(name.starts_with("refs/heads"));
+        if !name.starts_with("refs/heads/") {
+            return Ok(None);
+        }
         Ok(Some(name.replace("refs/heads/", "")))
     }
 

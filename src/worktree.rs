@@ -7,7 +7,7 @@ use crate::{
 };
 
 pub(crate) fn is_ignored(p: &PathBuf) -> bool {
-    vec![".git", ".ugit", "target", "dir/mdir/ignored.txt"]
+    vec![".git", ".ugit", "target"]
         .iter()
         .any(|a| p.ends_with(*a))
 }
@@ -38,8 +38,7 @@ impl WalkDir {
             }
             if full.is_dir() {
                 wd.dirs.push(WalkDir::new(full)?);
-            } else {
-                assert!(full.is_file());
+            } else if full.is_file() {
                 wd.files.push(full);
             }
         }

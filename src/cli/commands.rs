@@ -49,10 +49,10 @@ pub enum Command {
     },
     Status,
     Reset {
-        oid: CommitOid,
+        revision: Revision,
     },
     Show {
-        oid: CommitOid,
+        revision: Revision,
     },
     Diff {
         commit: Option<Revision>,
@@ -110,7 +110,10 @@ impl Command {
             Command::HashObject { file } => {
                 let d = Repository::read()?;
                 if !file.try_exists()? {
-                    println!("can't hash non-existent file at {:?}", file)
+                    return Err(NGitError::OperationFailed(format!(
+                        "can't hash non-existent file at {:?}",
+                        file
+                    )));
                 } else {
                     let content = std::fs::read(file)?;
                     let d = d.write_blob(content)?;
@@ -135,7 +138,7 @@ impl Command {
 
             Command::ReadTree { revision } => {
                 let d = Repository::read()?;
-                let digest = TreeOid::from_oid(d.resolve(revision)?);
+                let digest = resolve_treeish(&d, revision)?;
                 let fs = TreeStore::new(&d).checkout(&digest)?;
                 println!("restored {} files", fs.len());
                 for f in fs {
@@ -177,7 +180,7 @@ impl Command {
                     }
                 }
 
-                for (c, _) in CommitGraph::new(&d).history_for(HashSet::from([oid]))? {
+                for c in CommitGraph::new(&d).commits_and_parents(vec![oid])? {
                     Self::print_commit(h.get(&c), Commit::load(&d, c)?);
                 }
                 // while let Some(ref commit) = oid {
@@ -318,8 +321,9 @@ impl Command {
                 }
             }
 
-            Command::Reset { oid } => {
+            Command::Reset { revision } => {
                 let d = Repository::read()?;
+                let oid = d.resolve_commit(revision)?;
                 let val = RefValue::direct(oid.clone());
                 d.update_ref(&RefName::head(), &val, true)?;
                 let h = d.get_ref(&RefName::head(), true)?;
@@ -328,8 +332,9 @@ impl Command {
                     _ => return Err(NGitError::OperationFailed("reset".into())),
                 }
             }
-            Command::Show { oid } => {
+            Command::Show { revision } => {
                 let d = Repository::read()?;
+                let oid = d.resolve_commit(revision)?;
                 let commit = Commit::load(&d, oid)?;
                 let from = if let Some(p) = commit.parents.first() {
                     let commit = Commit::load(&d, p.clone())?;
@@ -523,5 +528,17 @@ impl Command {
             Command::Empty => println!("no command provided"),
         }
         Ok(())
+    }
+}
+
+fn resolve_treeish(repo: &Repository, revision: Revision) -> Result<TreeOid, NGitError> {
+    let oid = repo.resolve(revision)?;
+    let tree_oid = TreeOid::from_oid(oid.clone());
+    match repo.get_tree_text(&tree_oid) {
+        Ok(_) => Ok(tree_oid),
+        Err(NGitError::UnexpectedDataType(_, actual)) if actual == "commit" => {
+            Ok(Commit::load(repo, CommitOid::from_oid(oid))?.tree)
+        }
+        Err(err) => Err(err),
     }
 }

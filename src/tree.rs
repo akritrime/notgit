@@ -135,10 +135,11 @@ impl<'a> TreeStore<'a> {
     pub fn checkout(&self, oid: &TreeOid) -> Result<Vec<PathBuf>, NGitError> {
         let tree = self.read_snapshot(oid)?;
         let mut index = Index::read(self.repo)?;
+        let old_paths = index.items().map(|(path, _)| path.clone()).collect();
         index.update_raw(tree, false);
         index.write()?;
 
-        self.checkout_from_index(&index)
+        self.checkout_from_index(&index, old_paths)
     }
 
     pub fn checkout_merged(
@@ -157,9 +158,10 @@ impl<'a> TreeStore<'a> {
 
         let merged = TreeMerger::new(self.repo).merge(base, head, other)?;
         let mut index = Index::read(self.repo)?;
+        let old_paths = index.items().map(|(path, _)| path.clone()).collect();
         index.update_raw(merged.snapshot, false);
         index.write()?;
-        let files = self.checkout_from_index(&index)?;
+        let files = self.checkout_from_index(&index, old_paths)?;
         Ok(MergedCheckout {
             files,
             conflicts: merged.conflicts,
@@ -212,10 +214,14 @@ impl<'a> TreeStore<'a> {
         Ok(oids)
     }
 
-    fn checkout_from_index(&self, index: &Index<'_>) -> Result<Vec<PathBuf>, NGitError> {
+    fn checkout_from_index(
+        &self,
+        index: &Index<'_>,
+        old_paths: Vec<PathBuf>,
+    ) -> Result<Vec<PathBuf>, NGitError> {
         let mut files = vec![];
 
-        self.clean_worktree()?;
+        self.clean_removed_tracked_paths(index, old_paths)?;
 
         for (fp, oid) in index.items() {
             if let Some(dir) = fp.parent() {
@@ -227,8 +233,25 @@ impl<'a> TreeStore<'a> {
         Ok(files)
     }
 
-    fn clean_worktree(&self) -> Result<(), NGitError> {
-        WalkDir::new(self.repo.worktree().to_path_buf())?.clean()
+    fn clean_removed_tracked_paths(
+        &self,
+        index: &Index<'_>,
+        old_paths: Vec<PathBuf>,
+    ) -> Result<(), NGitError> {
+        let new_paths = index
+            .items()
+            .map(|(path, _)| path)
+            .collect::<HashSet<&PathBuf>>();
+        for path in old_paths {
+            if !new_paths.contains(&path) {
+                match std::fs::remove_file(&path) {
+                    Ok(()) => prune_empty_parents(self.repo.worktree(), &path)?,
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(err) => return Err(err.into()),
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -240,7 +263,7 @@ pub struct MergedCheckout {
 fn parse_tree(content: String, base: &Path) -> Result<Vec<StoredTreeEntry>, NGitError> {
     content
         .split('\n')
-        .map(|r| r.trim().split(' ').collect::<Vec<_>>())
+        .map(|r| r.trim().splitn(3, ' ').collect::<Vec<_>>())
         .filter(|r| r.len() == 3)
         .map(|r| {
             let oid = Oid::new(r[1])?;
@@ -267,4 +290,30 @@ fn parse_tree(content: String, base: &Path) -> Result<Vec<StoredTreeEntry>, NGit
             })
         })
         .collect()
+}
+
+fn prune_empty_parents(worktree: &Path, path: &Path) -> Result<(), NGitError> {
+    let Some(mut dir) = path.parent() else {
+        return Ok(());
+    };
+    while dir != worktree {
+        match std::fs::remove_dir(dir) {
+            Ok(()) => {
+                let Some(parent) = dir.parent() else {
+                    break;
+                };
+                dir = parent;
+            }
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::DirectoryNotEmpty | std::io::ErrorKind::NotFound
+                ) =>
+            {
+                break;
+            }
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Ok(())
 }

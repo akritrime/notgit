@@ -167,11 +167,11 @@ impl<'a> TryFrom<&'_ Index<'a>> for WalkDir {
                     .enumerate()
                     .find_map(|(i, d)| if d.root == cur_p { Some(i) } else { None })
                 {
-                    Some(i) => &mut wd.dirs[i],
+                    Some(i) => &mut cur_dir.dirs[i],
                     None => {
-                        let i = wd.dirs.len();
-                        wd.dirs.push(WalkDir::empty(cur_p));
-                        &mut wd.dirs[i]
+                        let i = cur_dir.dirs.len();
+                        cur_dir.dirs.push(WalkDir::empty(cur_p));
+                        &mut cur_dir.dirs[i]
                     }
                 }
             }

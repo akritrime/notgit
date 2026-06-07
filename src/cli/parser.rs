@@ -203,15 +203,15 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, NGi
             Ok(Command::Status)
         }
         "reset" => {
-            let mut args = parse_tokens("reset", raw_args, &[Token::CommitOid("oid")])?;
+            let mut args = parse_tokens("reset", raw_args, &[Token::Ref("revision")])?;
             Ok(Command::Reset {
-                oid: args.next().into_commit_oid(),
+                revision: args.next().into_ref(),
             })
         }
         "show" => {
-            let mut args = parse_tokens("show", raw_args, &[Token::CommitOid("oid")])?;
+            let mut args = parse_tokens("show", raw_args, &[Token::Ref("revision")])?;
             Ok(Command::Show {
-                oid: args.next().into_commit_oid(),
+                revision: args.next().into_ref(),
             })
         }
         "diff" => {
@@ -506,7 +506,13 @@ mod tests {
         assert_eq!(
             parse(&["reset", OID_A]).unwrap(),
             Command::Reset {
-                oid: CommitOid::new(OID_A).unwrap()
+                revision: Revision::new(OID_A).unwrap()
+            }
+        );
+        assert_eq!(
+            parse(&["show", "@"]).unwrap(),
+            Command::Show {
+                revision: Revision::new("@").unwrap()
             }
         );
         assert_eq!(
@@ -517,7 +523,7 @@ mod tests {
             }
         );
         assert!(matches!(
-            parse(&["show", "not-an-oid"]),
+            parse(&["merge-base", OID_A, "not-an-oid"]),
             Err(NGitError::InvalidOid(_))
         ));
     }
