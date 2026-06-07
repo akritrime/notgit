@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use crate::{errors::NGitError, merge::BlobMerger, repository::Repository, tree::TreeSnapshot};
+use crate::{errors::NGitError, merge::BlobChange, repository::Repository, tree::TreeSnapshot};
 
 #[derive(Default)]
 pub struct TreeDiff {
@@ -30,7 +30,7 @@ impl TreeDiff {
 
                     let a = from.content(repo)?;
                     let b = to.content(repo)?;
-                    let diff_text = diff_blobs(&a, &b, p)?;
+                    let diff_text = BlobChange::diff(&a, &b, p)?;
                     diff.changed.insert(path, diff_text);
                 }
                 (Some(_), None) => {
@@ -96,7 +96,7 @@ impl<'a> TreeMerger<'a> {
             let [base, head, other] = contents.as_slice() else {
                 unreachable!()
             };
-            let merged = BlobMerger::merge(base, head, other)?;
+            let merged = BlobChange::merge(base, head, other)?;
             if merged.has_conflict() {
                 conflicts.push(path.clone());
             }
@@ -107,75 +107,4 @@ impl<'a> TreeMerger<'a> {
             conflicts,
         })
     }
-}
-
-fn diff_blobs(a: &[u8], b: &[u8], path: impl AsRef<str>) -> Result<String, NGitError> {
-    let path = path.as_ref();
-    let workspace = DiffWorkspace::create()?;
-    let result = diff_in_workspace(&workspace, a, b, path);
-    let cleanup = workspace.remove();
-
-    match (result, cleanup) {
-        (Ok(diff), Ok(())) => Ok(diff),
-        (Ok(_), Err(err)) => Err(err),
-        (Err(err), _) => Err(err),
-    }
-}
-
-fn diff_in_workspace(
-    workspace: &DiffWorkspace,
-    a: &[u8],
-    b: &[u8],
-    path: &str,
-) -> Result<String, NGitError> {
-    let a_file = workspace.path("a");
-    let b_file = workspace.path("b");
-    std::fs::write(&a_file, a)?;
-    std::fs::write(&b_file, b)?;
-
-    let output = std::process::Command::new("diff")
-        .arg("--unified")
-        .arg("--show-c-function")
-        .arg("--label")
-        .arg(format!("a/{path}"))
-        .arg("--label")
-        .arg(format!("b/{path}"))
-        .arg(&a_file)
-        .arg(&b_file)
-        .output()?;
-
-    if !output.status.success() && output.status.code() != Some(1) {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(NGitError::SystemError("diff".into(), stderr.to_string()));
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-struct DiffWorkspace {
-    root: PathBuf,
-}
-
-impl DiffWorkspace {
-    fn create() -> Result<Self, NGitError> {
-        let root = unique_temp_path()?;
-        std::fs::create_dir(&root)?;
-        Ok(Self { root })
-    }
-
-    fn path(&self, name: &str) -> PathBuf {
-        self.root.join(name)
-    }
-
-    fn remove(self) -> Result<(), NGitError> {
-        std::fs::remove_dir_all(self.root)?;
-        Ok(())
-    }
-}
-
-fn unique_temp_path() -> Result<PathBuf, NGitError> {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)?
-        .as_nanos();
-    Ok(std::env::temp_dir().join(format!("notgit.diff.{}.{}", std::process::id(), nanos)))
 }
